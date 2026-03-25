@@ -1,0 +1,120 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email == "adityadake627@gmail.com" && request.auth.token.email_verified == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.uid is string &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['user', 'admin'] &&
+             (!('displayName' in data) || data.displayName is string) &&
+             (!('photoURL' in data) || data.photoURL is string) &&
+             (!('lastLoginAt' in data) || data.lastLoginAt is timestamp || data.lastLoginAt is string) &&
+             (!('createdAt' in data) || data.createdAt is timestamp || data.createdAt is string);
+    }
+
+    function isValidQuery(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.userEmail is string && isValidEmail(data.userEmail) &&
+             data.query is string && data.query.size() > 0 && data.query.size() < 5000 &&
+             (!('response' in data) || (data.response is string && data.response.size() < 50000)) &&
+             (!('mode' in data) || data.mode in ['text', 'image', 'video']) &&
+             (data.timestamp is timestamp || data.timestamp is string);
+    }
+
+    function isValidChat(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.title is string && data.title.size() < 200 &&
+             (!('mode' in data) || data.mode in ['text', 'image', 'video']) &&
+             data.messages is list &&
+             (data.createdAt is timestamp || data.createdAt is string) &&
+             (data.updatedAt is timestamp || data.updatedAt is string);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      
+      // Allow user to create their profile. They can only set role to 'user' unless they are an admin.
+      allow create: if isAuthenticated() && 
+                    isOwner(userId) && 
+                    hasRequiredFields(['uid', 'email', 'role']) &&
+                    isValidUser(request.resource.data) &&
+                    ((request.resource.data.role == 'user') || isAdmin());
+                    
+      // Allow user to update their profile. They cannot change their role unless they are an admin.
+      allow update: if isAuthenticated() && 
+                    isOwner(userId) && 
+                    isValidUser(request.resource.data) &&
+                    uidNotModified() &&
+                    ((request.resource.data.role == resource.data.role) || isAdmin());
+                    
+      allow delete: if isAdmin();
+    }
+
+    match /chats/{chatId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['userId', 'title', 'messages', 'createdAt', 'updatedAt']) &&
+                    isValidChat(request.resource.data);
+                    
+      allow update: if isAuthenticated() && 
+                    resource.data.userId == request.auth.uid &&
+                    isValidChat(request.resource.data);
+                    
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /queries/{queryId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      
+      allow create: if isAuthenticated() && 
+                    hasRequiredFields(['userId', 'userEmail', 'query', 'timestamp']) &&
+                    isValidQuery(request.resource.data);
+                    
+      allow update: if false; // Queries should not be updated
+      allow delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Indian GK AI",
+  "description": "An AI-powered Indian General Knowledge chatbot with an admin panel to monitor user queries and logins.",
+  "requestFramePermissions": []
+}
